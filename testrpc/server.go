@@ -1,12 +1,11 @@
 package testrpc
 
 import (
+	"encoding/gob"
 	"errors"
-	"fmt"
-	"log"
+	//"log"
 	"net"
 	"reflect"
-	"strconv"
 	"strings"
 	"sync"
 )
@@ -47,6 +46,11 @@ func (server *Server) Register(obj interface{}) error {
 		service.ReplyType = mtype.In(2)
 		service.Method = method
 		s[mname] = service
+
+		err := service.RegisterGobArgsType()
+		if err != nil {
+			return err
+		}
 	}
 	server.ServiceMap[serviceName] = s
 	server.ServerType = reflect.TypeOf(obj)
@@ -64,7 +68,10 @@ func (server *Server) ServeConn(conn net.Conn) {
 
 		// decode
 		var req Request
-		var edcode EdCode
+		edcode, err := GetEdcode()
+		if err != nil {
+			return
+		}
 		err = edcode.decode(data, &req)
 		if err != nil {
 			return
@@ -78,16 +85,7 @@ func (server *Server) ServeConn(conn net.Conn) {
 		service := server.ServiceMap[methodStr[0]][methodStr[1]]
 
 		// 构造argv
-		reqArgs := req.Args.(map[string]interface{})
-		argv := reflect.New(service.ArgType)
-		err = service.MakeArgType(reqArgs, argv)
-		if err != nil {
-			log.Println(err.Error())
-			return
-		}
-		if argv.Kind() == reflect.Ptr {
-			argv = argv.Elem()
-		}
+		argv, err := req.MakeArgs(edcode, *service)
 
 		// 构造reply
 		reply := reflect.New(service.ReplyType.Elem())
@@ -96,92 +94,37 @@ func (server *Server) ServeConn(conn net.Conn) {
 		function := service.Method.Func
 		out := function.Call([]reflect.Value{reflect.New(server.ServerType.Elem()), argv, reply})
 		if out[0].Interface() != nil {
-			log.Println(out[0])
 			return
 		}
 
 		// encode
 		replyData, err := edcode.encode(reply.Elem().Interface())
 		if err != nil {
-			log.Println(err.Error())
 			return
 		}
 
 		// 向conn写数据
 		_, err = trans.WriteData(replyData)
 		if err != nil {
-			log.Println(err.Error())
 			return
 		}
 	}
 }
 
-// 用data填充obj
-func (service *Service) MakeArgType(data map[string]interface{}, obj reflect.Value) error {
-	for k, v := range data {
-		err := service.SetField(obj, k, v)
-		if err != nil {
-			return err
+// 如果是GOB编解码，则注册Args的类型，防止gob编解码错误
+func (service *Service) RegisterGobArgsType() error {
+	edcodeStr := new(Config).GetEdcodeConf()
+	switch edcodeStr {
+	case "gob":
+		args := reflect.New(service.ArgType)
+		if args.Kind() == reflect.Ptr {
+			args = args.Elem()
 		}
-	}
-	return nil
-}
-
-//用map的值替换结构的值
-func (service *Service) SetField(obj reflect.Value, name string, value interface{}) error {
-	structValue := obj.Elem()
-	structFieldValue := structValue.FieldByName(name)
-
-	if !structFieldValue.IsValid() {
-		return fmt.Errorf("No such field: %s in obj", name)
-	}
-
-	if !structFieldValue.CanSet() {
-		return fmt.Errorf("Cannot set %s field value", name)
-	}
-
-	structFieldType := structFieldValue.Type()
-	val := reflect.ValueOf(value)
-
-	var err error
-	if structFieldType != val.Type() {
-		val, err = TypeConversion(fmt.Sprintf("%v", value), structFieldValue.Kind())
-		if err != nil {
-			return err
-		}
-	}
-
-	structFieldValue.Set(val)
-	return nil
-}
-
-// 将string类型的value值转换成reflect.Value类型
-func TypeConversion(value string, ntype reflect.Kind) (reflect.Value, error) {
-	switch ntype {
-	case reflect.String:
-		return reflect.ValueOf(value), nil
-	case reflect.Int:
-		i, err := strconv.Atoi(value)
-		return reflect.ValueOf(i), err
-	case reflect.Int8:
-		i, err := strconv.ParseInt(value, 10, 64)
-		return reflect.ValueOf(int8(i)), err
-	case reflect.Int16:
-		i, err := strconv.ParseInt(value, 10, 64)
-		return reflect.ValueOf(int16(i)), err
-	case reflect.Int32:
-		i, err := strconv.ParseInt(value, 10, 64)
-		return reflect.ValueOf(int32(i)), err
-	case reflect.Int64:
-		i, err := strconv.ParseInt(value, 10, 64)
-		return reflect.ValueOf(i), err
-	case reflect.Float32:
-		i, err := strconv.ParseFloat(value, 64)
-		return reflect.ValueOf(float32(i)), err
-	case reflect.Float64:
-		i, err := strconv.ParseFloat(value, 64)
-		return reflect.ValueOf(i), err
+		gob.Register(args.Interface())
+		return nil
+	case "json":
+		return nil
 	default:
-		return reflect.ValueOf(value), errors.New("unknown type：" + ntype.String())
+		return errors.New("Unknown edcode protocol: " + edcodeStr)
 	}
 }

@@ -15,13 +15,24 @@ func (client *Client) Close() {
 
 func (client *Client) Call(methodName string, req interface{}, reply interface{}) error {
 
-	// 构造一个Transfer
+	// 构造一个Request
 	request := NewRequest(methodName, req)
 
+	// 如果是GOB编码，则要注册相应类型，防止gob编解码错误
+	err := request.RegisterGobArgsType()
+	if err != nil {
+		log.Println(err.Error())
+		return err
+	}
+
 	// encode
-	var edcode EdCode
+	edcode, err := GetEdcode()
+	if err != nil {
+		return err
+	}
 	data, err := edcode.encode(request)
 	if err != nil {
+		log.Println(err.Error())
 		return err
 	}
 
