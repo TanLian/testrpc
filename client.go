@@ -1,40 +1,59 @@
-package main
+package testrpc
 
 import (
 	"log"
 	"net"
-	"os"
-	"testrpc"
 )
 
-type Args struct {
-	A, B int
+type Client struct {
+	conn net.Conn
 }
 
-func main() {
+func (client *Client) Close() {
+	client.conn.Close()
+}
 
-	// 连接本机的1234端口，返回一个net.Conn对象
-	conn, err := net.Dial("tcp", "127.0.0.1:1234")
+func (client *Client) Call(methodName string, req interface{}, reply interface{}) error {
+
+	// 构造一个Request
+	request := NewRequest(methodName, req)
+
+	// 如果是GOB编码，则要注册相应类型，防止gob编解码错误
+	err := request.RegisterGobArgsType()
 	if err != nil {
 		log.Println(err.Error())
-		os.Exit(-1)
+		return err
 	}
 
-	// main函数退出时关闭该网络连接
-	defer conn.Close()
-
-	// 创建一个rpc client对象
-	client := testrpc.NewClient(conn)
-	// main函数退出时关闭该client
-	defer client.Close()
-
-	// 调用远端Arith.Multiply函数
-	args := Args{7, 8}
-	var reply int
-	err = client.Call("Arith.Multiply", args, &reply)
+	// encode
+	edcode, err := GetEdcode()
 	if err != nil {
-		log.Fatal("arith error:", err)
+		return err
 	}
-	log.Println(reply)
+	data, err := edcode.encode(request)
+	if err != nil {
+		log.Println(err.Error())
+		return err
+	}
 
+	// write
+	trans := NewTransfer(client.conn)
+	_, err = trans.WriteData(data)
+	if err != nil {
+		log.Println(err.Error())
+		return err
+	}
+
+	// read
+	data2, err := trans.ReadData()
+	if err != nil {
+		log.Println(err.Error())
+		return err
+	}
+
+	// decode and assin to reply
+	edcode.decode(data2, reply)
+
+	// return
+	return nil
 }

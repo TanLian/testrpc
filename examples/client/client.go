@@ -1,8 +1,10 @@
 package main
 
 import (
+	"github.com/tanlian/testrpc"
 	"log"
-	"testrpc"
+	"net"
+	"os"
 )
 
 type Args struct {
@@ -11,13 +13,18 @@ type Args struct {
 
 func main() {
 
-	// 连接本机的1234端口，返回一个Client对象
-	client, err := testrpc.Dial("tcp", "127.0.0.1:1234")
+	// 连接本机的1234端口，返回一个net.Conn对象
+	conn, err := net.Dial("tcp", "127.0.0.1:1234")
 	if err != nil {
 		log.Println(err.Error())
-		return
+		os.Exit(-1)
 	}
 
+	// main函数退出时关闭该网络连接
+	defer conn.Close()
+
+	// 创建一个rpc client对象
+	client := testrpc.NewClient(conn)
 	// main函数退出时关闭该client
 	defer client.Close()
 
